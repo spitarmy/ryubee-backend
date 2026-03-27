@@ -19,6 +19,9 @@ class Company(Base):
     users: Mapped[list["User"]] = relationship(back_populates="company")
     settings: Mapped["CompanySettings"] = relationship(back_populates="company", uselist=False)
     jobs: Mapped[list["Job"]] = relationship(back_populates="company")
+    customers: Mapped[list["Customer"]] = relationship(back_populates="company")
+    routes: Mapped[list["Route"]] = relationship(back_populates="company")
+    invoices: Mapped[list["Invoice"]] = relationship(back_populates="company")
 
 
 class User(Base):
@@ -33,7 +36,9 @@ class User(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     company: Mapped["Company"] = relationship(back_populates="users")
-    jobs: Mapped[list["Job"]] = relationship(back_populates="user")
+    jobs: Mapped[list["Job"]] = relationship(back_populates="user", foreign_keys="Job.user_id")
+    assigned_jobs: Mapped[list["Job"]] = relationship(foreign_keys="Job.assigned_to")
+    routes: Mapped[list["Route"]] = relationship(back_populates="driver")
 
 
 class CompanySettings(Base):
@@ -70,6 +75,16 @@ class CompanySettings(Base):
     safe_price: Mapped[int] = mapped_column(Integer, default=15000)
     piano_price: Mapped[int] = mapped_column(Integer, default=20000)
     bike_price: Mapped[int] = mapped_column(Integer, default=5000)
+    # カスタムAI料金項目 (JSON array of dicts)
+    custom_ai_items: Mapped[str] = mapped_column(Text, default="[]")
+    # 許可証期限管理
+    license_expiry_date: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    # 決算月（1-12）
+    fiscal_year_end_month: Mapped[int] = mapped_column(Integer, default=3)
+
+    # メールテンプレート（未入金リマインド用）
+    unpaid_email_subject: Mapped[str] = mapped_column(String(255), default="【重要】未入金のお知らせ")
+    unpaid_email_body: Mapped[str] = mapped_column(Text, default="{{customer_name}}様\n\n平素は格別のお引き立てを賜り、厚く御礼申し上げます。\n以下の請求書につきまして、お支払いの確認がとれておりません。\n\n請求月: {{month}}\n請求額: ¥{{amount}}\n支払期限: {{due_date}}\n\n既にお振込み済みの場合は、行き違いをご容赦ください。\n何卒よろしくお願い申し上げます。")
 
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
@@ -82,6 +97,7 @@ class Job(Base):
     job_id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     company_id: Mapped[str] = mapped_column(String, ForeignKey("companies.id"), nullable=False)
     user_id: Mapped[str | None] = mapped_column(String, ForeignKey("users.id"), nullable=True)
+    customer_id: Mapped[str | None] = mapped_column(String, ForeignKey("customers.id"), nullable=True)
     # 案件情報
     job_name: Mapped[str] = mapped_column(String(500), nullable=False)
     customer_name: Mapped[str] = mapped_column(String(255), default="")
@@ -96,9 +112,227 @@ class Job(Base):
     status: Mapped[str] = mapped_column(String(50), default="pending")  # pending/confirmed/completed
     # 電子署名
     signature_data: Mapped[str] = mapped_column(Text, default="")  # Base64
+    # ── 新規フィールド ──
+    # 営業パイプライン: inquiry/estimate/negotiation/contract/scheduled/completed/lost
+    pipeline_stage: Mapped[str] = mapped_column(String(50), default="inquiry")
+    # 案件タイプ: store_removal/estate/welfare/general_waste/other
+    job_type: Mapped[str] = mapped_column(String(50), default="other")
+    # 担当営業
+    assigned_to: Mapped[str | None] = mapped_column(String, ForeignKey("users.id"), nullable=True)
+    # 写真（JSON配列: ["url1","url2",...]）
+    photos: Mapped[str] = mapped_column(Text, default="[]")
+    # ── 金額トラッキング ──
+    estimated_price: Mapped[int | None] = mapped_column(Integer, nullable=True)  # 見積金額
+    final_price: Mapped[int | None] = mapped_column(Integer, nullable=True)  # 成約/最終金額
+    discount_amount: Mapped[int] = mapped_column(Integer, default=0)  # 割引額
+    surcharge_amount: Mapped[int] = mapped_column(Integer, default=0)  # 追加料金
+    price_notes: Mapped[str] = mapped_column(Text, default="")  # 金額変更理由
     # タイムスタンプ
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
     company: Mapped["Company"] = relationship(back_populates="jobs")
-    user: Mapped["User | None"] = relationship(back_populates="jobs")
+    user: Mapped["User | None"] = relationship(back_populates="jobs", foreign_keys=[user_id])
+    assignee: Mapped["User | None"] = relationship(foreign_keys=[assigned_to])
+    customer_rel: Mapped["Customer | None"] = relationship()
+    comments: Mapped[list["JobComment"]] = relationship(back_populates="job", cascade="all, delete")
+
+
+class Customer(Base):
+    __tablename__ = "customers"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    company_id: Mapped[str] = mapped_column(String, ForeignKey("companies.id"), nullable=False)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    address: Mapped[str] = mapped_column(Text, default="")
+    phone: Mapped[str] = mapped_column(String(100), default="")
+    contract_type: Mapped[str] = mapped_column(String(50), default="spot")
+    # ── 新規フィールド ──
+    email: Mapped[str] = mapped_column(String(255), default="")
+    contact_person: Mapped[str] = mapped_column(String(255), default="")
+    notes: Mapped[str] = mapped_column(Text, default="")
+    contract_expiry_date: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    # ── 締め払い設定 ──
+    # 締め日 (1-31, 31=月末締め, 20=20日締め, 15=15日締め)
+    billing_closing_day: Mapped[int] = mapped_column(Integer, default=31)
+    # 支払月オフセット (0=当月, 1=翌月, 2=翌々月)
+    payment_due_month_offset: Mapped[int] = mapped_column(Integer, default=1)
+    # 支払日 (1-31, 31=月末払い, 20=20日払い)
+    payment_due_day: Mapped[int] = mapped_column(Integer, default=31)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    company: Mapped["Company"] = relationship(back_populates="customers")
+    manifests: Mapped[list["Manifest"]] = relationship(back_populates="customer")
+    invoices: Mapped[list["Invoice"]] = relationship(back_populates="customer")
+
+
+class Manifest(Base):
+    __tablename__ = "manifests"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    job_id: Mapped[str | None] = mapped_column(String, ForeignKey("jobs.job_id"), nullable=True)
+    customer_id: Mapped[str] = mapped_column(String, ForeignKey("customers.id"), nullable=False)
+    waste_type: Mapped[str] = mapped_column(String(255), default="")
+    issue_date: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    expected_return_date: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    actual_return_date: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    status: Mapped[str] = mapped_column(String(50), default="issued")
+    # ── 新規フィールド ──
+    manifest_number: Mapped[str] = mapped_column(String(100), default="")
+    weight_kg: Mapped[float | None] = mapped_column(Float, nullable=True)
+    unit_price_per_kg: Mapped[float] = mapped_column(Float, default=30.0)
+    waste_category: Mapped[str] = mapped_column(String(50), default="industrial")  # industrial / general
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    customer: Mapped["Customer"] = relationship(back_populates="manifests")
+    job: Mapped["Job | None"] = relationship()
+
+
+# ── 請求書 ──────────────────────────────────────────────
+class ItemTemplate(Base):
+    __tablename__ = "item_templates"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    company_id: Mapped[str] = mapped_column(String, ForeignKey("companies.id"), nullable=False)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)  # 品名 (例: 2tトラック積み放題)
+    unit_price: Mapped[float] = mapped_column(Float, default=0)
+    unit: Mapped[str] = mapped_column(String(50), default="式") # 単位 (式, kg, L, etc)
+    description: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class Invoice(Base):
+    __tablename__ = "invoices"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    company_id: Mapped[str] = mapped_column(String, ForeignKey("companies.id"), nullable=False)
+    customer_id: Mapped[str] = mapped_column(String, ForeignKey("customers.id"), nullable=False)
+    # 請求対象月 (YYYY-MM)
+    month: Mapped[str] = mapped_column(String(20), nullable=False)  # YYYY-MM
+    total_amount: Mapped[int] = mapped_column(Integer, default=0)
+    tax_amount: Mapped[int] = mapped_column(Integer, default=0)
+    # draft / sent / paid / partial / overdue
+    status: Mapped[str] = mapped_column(String(50), default="draft")
+    due_date: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    sent_at: Mapped[str | None] = mapped_column(String(20), nullable=True) # 請求書送付日
+    last_reminded_at: Mapped[str | None] = mapped_column(String(20), nullable=True) # 未入金リマインド送信日時
+    notes: Mapped[str] = mapped_column(Text, default="")
+    # freee連携フラグ
+    freee_synced: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+    company: Mapped["Company"] = relationship(back_populates="invoices")
+    customer: Mapped["Customer"] = relationship(back_populates="invoices")
+    items: Mapped[list["InvoiceItem"]] = relationship(back_populates="invoice", cascade="all, delete")
+    payments: Mapped[list["Payment"]] = relationship(back_populates="invoice", cascade="all, delete")
+
+
+class InvoiceItem(Base):
+    __tablename__ = "invoice_items"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    invoice_id: Mapped[str] = mapped_column(String, ForeignKey("invoices.id"), nullable=False)
+    description: Mapped[str] = mapped_column(String(500), default="")
+    quantity: Mapped[float] = mapped_column(Float, default=1)
+    unit: Mapped[str] = mapped_column(String(50), default="式")
+    unit_price: Mapped[float] = mapped_column(Float, default=0)
+    amount: Mapped[int] = mapped_column(Integer, default=0)
+    # マニフェスト紐付け（産廃重量課金の場合）
+    manifest_id: Mapped[str | None] = mapped_column(String, ForeignKey("manifests.id"), nullable=True)
+
+    invoice: Mapped["Invoice"] = relationship(back_populates="items")
+    manifest: Mapped["Manifest | None"] = relationship()
+
+
+class Payment(Base):
+    __tablename__ = "payments"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    invoice_id: Mapped[str] = mapped_column(String, ForeignKey("invoices.id"), nullable=False)
+    company_id: Mapped[str] = mapped_column(String, ForeignKey("companies.id"), nullable=False)
+    amount: Mapped[int] = mapped_column(Integer, default=0)
+    payment_date: Mapped[str] = mapped_column(String(20), nullable=False)
+    payment_method: Mapped[str] = mapped_column(String(50), default="bank_transfer")  # bank_transfer/cash/other
+    notes: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    invoice: Mapped["Invoice"] = relationship(back_populates="payments")
+
+
+class Route(Base):
+    __tablename__ = "routes"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    company_id: Mapped[str] = mapped_column(String, ForeignKey("companies.id"), nullable=False)
+    driver_id: Mapped[str | None] = mapped_column(String, ForeignKey("users.id"), nullable=True)
+    date: Mapped[str] = mapped_column(String(20), nullable=False)
+    vehicle_name: Mapped[str] = mapped_column(String(100), default="")
+    status: Mapped[str] = mapped_column(String(50), default="draft")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    company: Mapped["Company"] = relationship(back_populates="routes")
+    driver: Mapped["User | None"] = relationship(back_populates="routes")
+    stops: Mapped[list["RouteStop"]] = relationship(back_populates="route", cascade="all, delete")
+
+
+class RouteStop(Base):
+    __tablename__ = "route_stops"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    route_id: Mapped[str] = mapped_column(String, ForeignKey("routes.id"), nullable=False)
+    customer_id: Mapped[str] = mapped_column(String, ForeignKey("customers.id"), nullable=False)
+    order_index: Mapped[int] = mapped_column(Integer, default=0)
+    status: Mapped[str] = mapped_column(String(50), default="pending")
+    notes: Mapped[str] = mapped_column(Text, default="")
+
+    route: Mapped["Route"] = relationship(back_populates="stops")
+    customer: Mapped["Customer"] = relationship()
+
+
+# ── 案件コメント ──────────────────────────────────────────
+class JobComment(Base):
+    __tablename__ = "job_comments"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    job_id: Mapped[str] = mapped_column(String, ForeignKey("jobs.job_id"), nullable=False)
+    user_id: Mapped[str] = mapped_column(String, ForeignKey("users.id"), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    job: Mapped["Job"] = relationship(back_populates="comments")
+    user: Mapped["User"] = relationship()
+
+
+# ── 銀行入金取込 ──────────────────────────────────────────
+class BankTransaction(Base):
+    __tablename__ = "bank_transactions"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    company_id: Mapped[str] = mapped_column(String, ForeignKey("companies.id"), nullable=False)
+    transaction_date: Mapped[str] = mapped_column(String(20), nullable=False)
+    amount: Mapped[int] = mapped_column(Integer, nullable=False)
+    payer_name: Mapped[str] = mapped_column(String(255), default="")
+    payer_name_kana: Mapped[str] = mapped_column(String(255), default="")  # カナ名義
+    bank_name: Mapped[str] = mapped_column(String(100), default="京都銀行")
+    # マッチング結果
+    matched_customer_id: Mapped[str | None] = mapped_column(String, ForeignKey("customers.id"), nullable=True)
+    matched_invoice_id: Mapped[str | None] = mapped_column(String, ForeignKey("invoices.id"), nullable=True)
+    # unmatched / matched / reconciled
+    status: Mapped[str] = mapped_column(String(50), default="unmatched")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    customer: Mapped["Customer | None"] = relationship()
+    invoice: Mapped["Invoice | None"] = relationship()
+
+
+# ── freee連携 ─────────────────────────────────────────────
+class FreeeIntegration(Base):
+    __tablename__ = "freee_integrations"
+
+    company_id: Mapped[str] = mapped_column(String, ForeignKey("companies.id"), primary_key=True)
+    access_token: Mapped[str] = mapped_column(Text, default="")
+    refresh_token: Mapped[str] = mapped_column(Text, default="")
+    token_expiry: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    freee_company_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)

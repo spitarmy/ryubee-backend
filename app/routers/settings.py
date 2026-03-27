@@ -1,4 +1,5 @@
 """設定ルーター: 料金マスタ + 会社情報の取得・保存"""
+import json
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -40,6 +41,13 @@ class SettingsSchema(BaseModel):
     safe_price: int = 15000
     piano_price: int = 20000
     bike_price: int = 5000
+    custom_ai_items: list[dict] = []
+
+    # 決算月
+    fiscal_year_end_month: int = 3
+    # メールテンプレート
+    unpaid_email_subject: str = "【重要】未入金のお知らせ"
+    unpaid_email_body: str = "{{customer_name}}様\n\n平素は格別のお引き立てを賜り、厚く御礼申し上げます。\n以下の請求書につきまして、お支払いの確認がとれておりません。\n\n請求月: {{month}}\n請求額: ¥{{amount}}\n支払期限: {{due_date}}\n\n既にお振込み済みの場合は、行き違いをご容赦ください。\n何卒よろしくお願い申し上げます。"
 
     model_config = {"from_attributes": True}
 
@@ -59,9 +67,13 @@ def get_settings(
         db.refresh(rec)
 
     # company_name は Company テーブルから
-    data = SettingsSchema.model_validate(rec)
-    data.company_name = rec.company.name
-    return data
+    data_dict = {col.name: getattr(rec, col.name) for col in rec.__table__.columns}
+    data_dict["company_name"] = rec.company.name
+    try:
+        data_dict["custom_ai_items"] = json.loads(rec.custom_ai_items) if rec.custom_ai_items else []
+    except Exception:
+        data_dict["custom_ai_items"] = []
+    return SettingsSchema(**data_dict)
 
 
 @router.put("", response_model=SettingsSchema)
@@ -81,14 +93,20 @@ def update_settings(
         rec.company.name = body.company_name
 
     # CompanySettings フィールドを一括更新
-    exclude = {"company_name"}
+    exclude = {"company_name", "custom_ai_items"}
     for field, val in body.model_dump(exclude=exclude).items():
         if hasattr(rec, field):
             setattr(rec, field, val)
 
+    rec.custom_ai_items = json.dumps(body.custom_ai_items, ensure_ascii=False)
+
     db.commit()
     db.refresh(rec)
 
-    result = SettingsSchema.model_validate(rec)
-    result.company_name = rec.company.name
-    return result
+    data_dict = {col.name: getattr(rec, col.name) for col in rec.__table__.columns}
+    data_dict["company_name"] = rec.company.name
+    try:
+        data_dict["custom_ai_items"] = json.loads(rec.custom_ai_items) if rec.custom_ai_items else []
+    except Exception:
+        data_dict["custom_ai_items"] = []
+    return SettingsSchema(**data_dict)

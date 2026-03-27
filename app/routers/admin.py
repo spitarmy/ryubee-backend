@@ -48,7 +48,8 @@ def get_summary(
     )
 
     month_jobs  = len(jobs_this_month)
-    month_sales = sum(j.price_total for j in jobs_this_month)
+    # 不成約 (lost) を売上から除外
+    month_sales = sum(j.price_total for j in jobs_this_month if j.status != "lost")
     completed   = sum(1 for j in jobs_this_month if j.status == "completed")
     conversion  = round(completed / month_jobs * 100) if month_jobs > 0 else 0
     avg_price   = round(month_sales / month_jobs) if month_jobs > 0 else 0
@@ -81,6 +82,7 @@ def get_sales_chart(
                 models.Job.company_id == current_user.company_id,
                 models.Job.created_at >= day_start,
                 models.Job.created_at <= day_end,
+                models.Job.status != "lost"  # 不成約の金額はチャートに含めない
             )
             .scalar()
         ) or 0
@@ -102,7 +104,10 @@ def get_staff_ranking(
             func.count(models.Job.job_id).label("count"),
         )
         .join(models.Job, models.Job.user_id == models.User.id)
-        .filter(models.Job.company_id == current_user.company_id)
+        .filter(
+            models.Job.company_id == current_user.company_id,
+            models.Job.status != "lost"  # 不成約の売上を成績に含めない
+        )
         .group_by(models.User.id, models.User.name)
         .order_by(func.sum(models.Job.price_total).desc())
         .all()
