@@ -16,17 +16,20 @@ app = FastAPI(
 )
 
 # ── CORS（Vercel/GitHub Pagesフロントからのアクセスを許可）────────────
-FRONTEND_ORIGIN = os.getenv("FRONTEND_ORIGIN", "*")
+env_origin = os.getenv("FRONTEND_ORIGIN", "")
+allowed_origins = [
+    "https://spitarmy.github.io",
+    "http://localhost:3000",
+    "http://127.0.0.1:5500",
+    "http://localhost:5500",
+    "http://localhost:5501"
+]
+if env_origin and env_origin != "*":
+    allowed_origins.append(env_origin)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        FRONTEND_ORIGIN,
-        "https://spitarmy.github.io",
-        "http://localhost:3000",
-        "http://127.0.0.1:5500",
-        "http://localhost:5500",
-        "http://localhost:5501"
-    ],
+    allow_origins=allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
