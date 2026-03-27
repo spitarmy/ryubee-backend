@@ -127,6 +127,9 @@ class Job(Base):
     discount_amount: Mapped[int] = mapped_column(Integer, default=0)  # 割引額
     surcharge_amount: Mapped[int] = mapped_column(Integer, default=0)  # 追加料金
     price_notes: Mapped[str] = mapped_column(Text, default="")  # 金額変更理由
+    # ── 山文様 拡張フォーム用 ──
+    form_data: Mapped[str] = mapped_column(Text, default="{}")
+    
     # タイムスタンプ
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
@@ -159,6 +162,9 @@ class Customer(Base):
     payment_due_month_offset: Mapped[int] = mapped_column(Integer, default=1)
     # 支払日 (1-31, 31=月末払い, 20=20日払い)
     payment_due_day: Mapped[int] = mapped_column(Integer, default=31)
+    # ── 山文様 拡張フォーム用 ──
+    form_data: Mapped[str] = mapped_column(Text, default="{}")
+    
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     company: Mapped["Company"] = relationship(back_populates="customers")

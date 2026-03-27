@@ -19,6 +19,7 @@ class CustomerCreate(BaseModel):
     billing_closing_day: int = 31
     payment_due_month_offset: int = 1
     payment_due_day: int = 31
+    form_data: str = "{}"
 
 
 class CustomerUpdate(BaseModel):
@@ -33,6 +34,7 @@ class CustomerUpdate(BaseModel):
     billing_closing_day: int | None = None
     payment_due_month_offset: int | None = None
     payment_due_day: int | None = None
+    form_data: str | None = None
 
 
 class CustomerOut(BaseModel):
@@ -49,6 +51,7 @@ class CustomerOut(BaseModel):
     billing_closing_day: int = 31
     payment_due_month_offset: int = 1
     payment_due_day: int = 31
+    form_data: str = "{}"
     created_at: str
 
     model_config = {"from_attributes": True}
@@ -69,6 +72,7 @@ class CustomerOut(BaseModel):
             billing_closing_day=obj.billing_closing_day,
             payment_due_month_offset=obj.payment_due_month_offset,
             payment_due_day=obj.payment_due_day,
+            form_data=obj.form_data or "{}",
             created_at=obj.created_at.isoformat()
         )
 
@@ -103,6 +107,7 @@ def create_customer(
         billing_closing_day=body.billing_closing_day,
         payment_due_month_offset=body.payment_due_month_offset,
         payment_due_day=body.payment_due_day,
+        form_data=body.form_data,
     )
     db.add(new_cust)
     db.commit()

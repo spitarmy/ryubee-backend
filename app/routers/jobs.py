@@ -25,6 +25,7 @@ class JobCreate(BaseModel):
     job_type: str = "other"
     assigned_to: str | None = None
     customer_id: str | None = None
+    form_data: str = "{}"
 
 
 class JobUpdate(BaseModel):
@@ -42,6 +43,7 @@ class JobUpdate(BaseModel):
     job_type: str | None = None
     assigned_to: str | None = None
     photos: str | None = None  # JSON array string
+    form_data: str | None = None
 
 
 class JobOut(BaseModel):
@@ -68,6 +70,7 @@ class JobOut(BaseModel):
     discount_amount: int = 0
     surcharge_amount: int = 0
     price_notes: str = ""
+    form_data: str = "{}"
     comment_count: int = 0
     created_at: str
     updated_at: str
@@ -118,6 +121,7 @@ class JobOut(BaseModel):
             discount_amount=j.discount_amount,
             surcharge_amount=j.surcharge_amount,
             price_notes=j.price_notes,
+            form_data=j.form_data or "{}",
             comment_count=len(j.comments) if j.comments else 0,
             created_at=j.created_at.isoformat(),
             updated_at=j.updated_at.isoformat(),
@@ -195,6 +199,7 @@ def create_job(
         job_type=body.job_type,
         assigned_to=body.assigned_to,
         customer_id=body.customer_id,
+        form_data=body.form_data,
     )
     db.add(job)
     db.commit()
