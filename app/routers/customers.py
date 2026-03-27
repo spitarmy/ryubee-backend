@@ -59,21 +59,21 @@ class CustomerOut(BaseModel):
     @classmethod
     def from_orm_obj(cls, obj: models.Customer):
         return cls(
-            id=obj.id,
-            company_id=obj.company_id,
-            name=obj.name,
-            address=obj.address,
-            phone=obj.phone,
-            contract_type=obj.contract_type,
-            email=obj.email,
-            contact_person=obj.contact_person,
-            notes=obj.notes,
-            contract_expiry_date=obj.contract_expiry_date,
-            billing_closing_day=obj.billing_closing_day,
-            payment_due_month_offset=obj.payment_due_month_offset,
-            payment_due_day=obj.payment_due_day,
-            form_data=obj.form_data or "{}",
-            created_at=obj.created_at.isoformat()
+            id=str(obj.id) if obj.id else "",
+            company_id=str(obj.company_id) if obj.company_id else "",
+            name=str(obj.name) if obj.name else "名称未設定",
+            address=str(obj.address) if obj.address else "",
+            phone=str(obj.phone) if obj.phone else "",
+            contract_type=str(obj.contract_type) if obj.contract_type else "spot",
+            email=str(obj.email) if obj.email else "",
+            contact_person=str(obj.contact_person) if obj.contact_person else "",
+            notes=str(obj.notes) if obj.notes else "",
+            contract_expiry_date=str(obj.contract_expiry_date) if obj.contract_expiry_date else None,
+            billing_closing_day=int(obj.billing_closing_day) if obj.billing_closing_day is not None else 31,
+            payment_due_month_offset=int(obj.payment_due_month_offset) if obj.payment_due_month_offset is not None else 1,
+            payment_due_day=int(obj.payment_due_day) if obj.payment_due_day is not None else 31,
+            form_data=str(obj.form_data) if obj.form_data else "{}",
+            created_at=obj.created_at.isoformat() if obj.created_at else ""
         )
 
 
