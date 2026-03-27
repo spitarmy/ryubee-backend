@@ -234,7 +234,7 @@ def update_job(
 @router.delete("/{job_id}", status_code=204)
 def delete_job(
     job_id: str,
-    current_user: models.User = Depends(auth.get_current_user),
+    current_user: models.User = Depends(auth.require_admin),
     db: Session = Depends(get_db),
 ):
     job = _get_own_job(job_id, current_user, db)

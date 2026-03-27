@@ -132,8 +132,8 @@ def update_customer(
 @router.delete("/{customer_id}", status_code=204)
 def delete_customer(
     customer_id: str,
+    current_user: models.User = Depends(auth.require_admin),
     db: Session = Depends(get_db),
-    current_user: models.User = Depends(auth.get_current_user),
 ):
     cust = db.query(models.Customer).filter_by(
         id=customer_id, company_id=current_user.company_id

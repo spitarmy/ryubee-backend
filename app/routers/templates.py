@@ -90,8 +90,8 @@ def update_template(
 @router.delete("/{template_id}", status_code=204)
 def delete_template(
     template_id: str,
+    current_user: models.User = Depends(auth.require_admin),
     db: Session = Depends(get_db),
-    current_user: models.User = Depends(auth.get_current_user),
 ):
     t = db.query(models.ItemTemplate).filter_by(
         id=template_id, company_id=current_user.company_id

@@ -87,8 +87,8 @@ def create_payment(
 @router.delete("/{payment_id}", status_code=204)
 def delete_payment(
     payment_id: str,
-    current_user: models.User = Depends(auth.get_current_user),
     db: Session = Depends(get_db),
+    current_user: models.User = Depends(auth.require_admin),
 ):
     """入金取消 & 請求書ステータスの再計算"""
     payment = db.query(models.Payment).filter_by(
