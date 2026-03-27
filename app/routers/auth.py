@@ -40,8 +40,8 @@ class TokenResponse(BaseModel):
 @router.post("/register", response_model=TokenResponse)
 def register(req: RegisterRequest, db: Session = Depends(get_db)):
     """新規業者登録 + 初期管理者ユーザー作成"""
-    # 1社のみ許可する制約（セキュリティ対策）
-    if db.query(models.Company).count() >= 1:
+    # 2社のみ許可する制約（マスター用＋山文様）
+    if db.query(models.Company).count() >= 2:
         raise HTTPException(403, "新規の業者登録は制限されています。管理者の招待機能をご利用ください。")
 
     if db.query(models.User).filter_by(email=req.email).first():
