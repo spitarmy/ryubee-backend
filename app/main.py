@@ -55,6 +55,26 @@ app.include_router(volume.router)
 def root():
     return {"message": "Ryu兵衛 API is running 🚀", "docs": "/docs"}
 
+from sqlalchemy.orm import Session
+from app.database import get_db
+from app import models
+from app.routers.customers import CustomerOut
+
+@app.get("/v1/debug_customers")
+def debug_customers(db: Session = Depends(get_db)):
+    try:
+        user = db.query(models.User).filter_by(email="test@yamabun.com").first()
+        if not user:
+            return {"error": "User not found"}
+        customers = db.query(models.Customer).filter_by(
+            company_id=user.company_id
+        ).order_by(models.Customer.created_at.desc()).all()
+        
+        return [CustomerOut.from_orm_obj(c).model_dump() for c in customers]
+    except Exception as e:
+        import traceback
+        return {"error": str(e), "trace": traceback.format_exc()}
+
 
 @app.get("/health")
 def health():
