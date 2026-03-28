@@ -66,6 +66,7 @@ def debug_seed():
         import uuid
         import json
         from datetime import datetime, date
+        from app import models
         db = SessionLocal()
         try:
             user = db.query(models.User).filter_by(email="test@yamabun.com").first()
