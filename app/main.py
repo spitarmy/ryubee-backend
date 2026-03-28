@@ -56,21 +56,28 @@ def root():
     return {"message": "Ryu兵衛 API is running 🚀", "docs": "/docs"}
 
 from sqlalchemy.orm import Session
-from app.database import get_db
-from app import models
-from app.routers.customers import CustomerOut
+from app.database import get_db, engine
+from sqlalchemy import text
 
 @app.get("/v1/debug_customers")
-def debug_customers(db: Session = Depends(get_db)):
+def debug_customers():
     try:
-        user = db.query(models.User).filter_by(email="test@yamabun.com").first()
-        if not user:
-            return {"error": "User not found"}
-        customers = db.query(models.Customer).filter_by(
-            company_id=user.company_id
-        ).order_by(models.Customer.created_at.desc()).all()
-        
-        return [CustomerOut.from_orm_obj(c).model_dump() for c in customers]
+        with engine.connect() as conn:
+            # 顧客テーブルにカラムを追加
+            try:
+                conn.execute(text("ALTER TABLE customers ADD COLUMN form_data TEXT DEFAULT '{}'"))
+                conn.commit()
+            except Exception as e:
+                print("customers ALTER TABLE ERROR (already exists?):", e)
+            
+            # 案件テーブルにカラムを追加
+            try:
+                conn.execute(text("ALTER TABLE jobs ADD COLUMN form_data TEXT DEFAULT '{}'"))
+                conn.commit()
+            except Exception as e:
+                print("jobs ALTER TABLE ERROR (already exists?):", e)
+                
+        return {"status": "Migration applied successfully"}
     except Exception as e:
         import traceback
         return {"error": str(e), "trace": traceback.format_exc()}
