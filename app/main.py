@@ -69,9 +69,9 @@ def debug_seed():
         from app import models
         db = SessionLocal()
         try:
-            user = db.query(models.User).filter_by(email="test@yamabun.com").first()
+            user = db.query(models.User).first()
             if not user:
-                return {"error": "test@yamabun.com not found"}
+                return {"error": "No users found in database to seed for"}
             company_id = user.company_id
             
             existing = db.query(models.Customer).filter_by(company_id=company_id).count()
