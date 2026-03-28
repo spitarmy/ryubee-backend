@@ -77,15 +77,21 @@ class CustomerOut(BaseModel):
         )
 
 
-@router.get("", response_model=list[CustomerOut])
+@router.get("")
 def list_customers(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(auth.get_current_user),
 ):
-    customers = db.query(models.Customer).filter_by(
-        company_id=current_user.company_id
-    ).order_by(models.Customer.created_at.desc()).all()
-    return [CustomerOut.from_orm_obj(c) for c in customers]
+    try:
+        customers = db.query(models.Customer).filter_by(
+            company_id=current_user.company_id
+        ).order_by(models.Customer.created_at.desc()).all()
+        return [CustomerOut.from_orm_obj(c).model_dump() for c in customers]
+    except Exception as e:
+        import traceback
+        error_info = traceback.format_exc()
+        # Raise 400 instead of 500 so CORS headers are not dropped by FastAPI!
+        raise HTTPException(status_code=400, detail=f"DEBUG ERROR: {str(e)}\n\n{error_info}")
 
 
 @router.post("", response_model=CustomerOut)
