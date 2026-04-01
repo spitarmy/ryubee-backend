@@ -1,10 +1,11 @@
 import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from app.database import engine, Base
 from app.routers import (
     auth, jobs, admin, customers, manifests, routes,
-    invoices, payments, settings, bank, freee, templates, volume
+    invoices, payments, settings, bank, freee, templates, volume, daily_reports
 )
 # テーブルを自動作成（本番ではAlembicマイグレーション推奨）
 Base.metadata.create_all(bind=engine)
@@ -14,6 +15,9 @@ app = FastAPI(
     description="立米AI現場見積ツール バックエンドAPI",
     version="1.0.0",
 )
+
+os.makedirs("uploads", exist_ok=True)
+app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 
 # ── CORS（Vercel/GitHub Pagesフロントからのアクセスを許可）────────────
 env_origin = os.getenv("FRONTEND_ORIGIN", "")
@@ -49,6 +53,7 @@ app.include_router(bank.router)
 app.include_router(freee.router)
 app.include_router(templates.router)
 app.include_router(volume.router)
+app.include_router(daily_reports.router)
 
 
 @app.get("/")

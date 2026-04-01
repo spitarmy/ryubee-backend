@@ -1,10 +1,14 @@
 """請求書ルーター: 請求書CRUD・月次一括生成・未入金アラート"""
+import os
+import json
+import base64
 from datetime import datetime, date
 from typing import Any
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, Form
 from pydantic import BaseModel
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import func
+from openai import AsyncOpenAI
 from app.database import get_db
 from app import models, auth
 
@@ -213,6 +217,113 @@ def create_invoice(
     return _invoice_to_out(inv)
 
 
+client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
+OCR_SYSTEM_PROMPT = """
+あなたは、手書きのゴミ回収伝票・集計表（例：花のいえ）から数値を読み取るOCR AIです。
+以下のルールに厳密に従って、合計量（重量kgまたは袋数）を読み取り、JSON形式で出力してください。
+
+【出力仕様】
+{
+  "total_quantity": 5345, // 読み取った合計数値（数値型）
+  "unit": "kg", // kg または 袋
+  "notes": "花のいえ集計表より読み取り" // 任意の読み取りメモ
+}
+
+- もし画像の「合計」欄に重量（例: 5345kg）と袋数の両方がある場合は、重量(kg)を優先して `total_quantity` とし、`unit` を "kg" にしてください。
+- 合計欄がない場合は、読み取れる全行の数値を足し合わせて合計を算出してください。
+- マークダウン(```json 等)を使用しないでください。パース可能な「生のJSONテキスト」のみを出力してください。
+"""
+
+@router.post("/ocr-create", response_model=InvoiceOut, status_code=201)
+async def create_ocr_invoice(
+    customer_id: str = Form(...),
+    image: UploadFile = File(...),
+    current_user: models.User = Depends(auth.get_current_user),
+    db: Session = Depends(get_db),
+):
+    cust = db.query(models.Customer).filter_by(
+        id=customer_id, company_id=current_user.company_id
+    ).first()
+    if not cust:
+        raise HTTPException(404, "顧客が見つかりません")
+
+    content = await image.read()
+    b64 = base64.b64encode(content).decode('utf-8')
+    mime_type = image.content_type or "image/jpeg"
+    b64_url = f"data:{mime_type};base64,{b64}"
+
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key or not api_key.startswith("sk-"):
+        raise HTTPException(500, "OpenAI API Keyが設定されていません")
+
+    messages = [
+        {"role": "system", "content": OCR_SYSTEM_PROMPT},
+        {"role": "user", "content": [
+            {"type": "text", "text": "この集計表の合計量を読み取ってください。"},
+            {"type": "image_url", "image_url": {"url": b64_url}}
+        ]}
+    ]
+
+    try:
+        response = await client.chat.completions.create(
+            model="gpt-4o",
+            messages=messages,
+            response_format={"type": "json_object"},
+            max_tokens=600,
+            temperature=0.1
+        )
+        ai_content = response.choices[0].message.content
+        ai_result = json.loads(ai_content)
+    except Exception as e:
+        print(f"OpenAI API Error: {e}")
+        raise HTTPException(500, "AI画像読み取りに失敗しました")
+
+    total_qty = float(ai_result.get("total_quantity", 0))
+    unit = ai_result.get("unit", "式")
+    notes = ai_result.get("notes", "写真からAI自動読み取り")
+
+    # 単価は一旦0で設定し、ユーザーが編集できるようにする
+    unit_price = 0
+    now = date.today()
+    month = f"{now.year}-{now.month:02d}"
+    due_date_str = _auto_due_date(cust, month)
+
+    amount = int(total_qty * unit_price)
+    tax = int(amount * 0.1)
+
+    inv = models.Invoice(
+        company_id=current_user.company_id,
+        customer_id=customer_id,
+        month=month,
+        total_amount=amount + tax,
+        tax_amount=tax,
+        status="draft",
+        due_date=due_date_str,
+        notes=f"【AI OCR自動作成】\n抽出結果: {total_qty}{unit}\nAIメモ: {notes}",
+    )
+    db.add(inv)
+    db.flush()
+
+    db.add(models.InvoiceItem(
+        invoice_id=inv.id,
+        description=f"回収費用 ({total_qty}{unit})",
+        quantity=total_qty,
+        unit=unit,
+        unit_price=unit_price,
+        amount=amount,
+    ))
+
+    db.commit()
+    db.refresh(inv)
+    inv = db.query(models.Invoice).options(
+        joinedload(models.Invoice.items),
+        joinedload(models.Invoice.payments),
+        joinedload(models.Invoice.customer),
+    ).filter_by(id=inv.id).first()
+    return _invoice_to_out(inv)
+
+
 @router.get("/unpaid-alerts", response_model=list[UnpaidAlertOut])
 def unpaid_alerts(
     current_user: models.User = Depends(auth.get_current_user),
@@ -362,6 +473,72 @@ def update_invoice(
     return _invoice_to_out(inv)
 
 
+class InvoiceFullUpdate(BaseModel):
+    total_amount: int | None = None
+    tax_amount: int | None = None
+    status: str | None = None
+    due_date: str | None = None
+    notes: str | None = None
+    sent_at: str | None = None
+    items: list[InvoiceItemCreate] | None = None
+
+
+@router.put("/{invoice_id}/full", response_model=InvoiceOut)
+def update_invoice_full(
+    invoice_id: str,
+    body: InvoiceFullUpdate,
+    current_user: models.User = Depends(auth.get_current_user),
+    db: Session = Depends(get_db),
+):
+    """請求書のトップレベル情報＋明細を一括更新"""
+    inv = db.query(models.Invoice).options(
+        joinedload(models.Invoice.items),
+    ).filter_by(
+        id=invoice_id, company_id=current_user.company_id
+    ).first()
+    if not inv:
+        raise HTTPException(404, "請求書が見つかりません")
+
+    data = body.model_dump(exclude_none=True)
+    items_data = data.pop("items", None)
+
+    for field, val in data.items():
+        setattr(inv, field, val)
+
+    if items_data is not None:
+        # 既存明細を全削除
+        for old_item in inv.items:
+            db.delete(old_item)
+        db.flush()
+        # 新しい明細を追加
+        subtotal = 0
+        for item in items_data:
+            amt = item.get("amount", 0) or int(float(item.get("quantity", 1)) * float(item.get("unit_price", 0)))
+            db.add(models.InvoiceItem(
+                invoice_id=inv.id,
+                description=item.get("description", ""),
+                quantity=item.get("quantity", 1),
+                unit=item.get("unit", "式"),
+                unit_price=item.get("unit_price", 0),
+                amount=amt,
+                manifest_id=item.get("manifest_id"),
+            ))
+            subtotal += amt
+        # 合計再計算
+        tax = int(subtotal * 0.1)
+        inv.total_amount = subtotal + tax
+        inv.tax_amount = tax
+
+    db.commit()
+    db.refresh(inv)
+    inv = db.query(models.Invoice).options(
+        joinedload(models.Invoice.items),
+        joinedload(models.Invoice.payments),
+        joinedload(models.Invoice.customer),
+    ).filter_by(id=inv.id).first()
+    return _invoice_to_out(inv)
+
+
 @router.post("/generate-monthly", response_model=list[InvoiceOut])
 def generate_monthly_invoices(
     body: MonthlyGenerateRequest,
@@ -384,14 +561,42 @@ def generate_monthly_invoices(
         models.Manifest.issue_date.like(f"{month}%"),
     ).all()
 
+    # この月に完了した一般案件（産廃マニフェスト以外）も取得
+    jobs = db.query(models.Job).filter(
+        models.Job.customer_id.in_(c_ids),
+        models.Job.work_date.like(f"{month}%")
+    ).all()
+
     # 顧客ごとにグルーピング
     from collections import defaultdict
     cust_manifests: dict[str, list[models.Manifest]] = defaultdict(list)
+    cust_jobs: dict[str, list[models.Job]] = defaultdict(list)
     for m in manifests:
         cust_manifests[m.customer_id].append(m)
+    for j in jobs:
+        cust_jobs[j.customer_id].append(j)
+
+    # 処理対象の顧客IDリスト
+    target_cust_ids = set(list(cust_manifests.keys()) + list(cust_jobs.keys()))
+    for c in customers:
+        if c.contract_type == "subscription":
+            target_cust_ids.add(c.id)
 
     created = []
-    for cust_id, ms in cust_manifests.items():
+    
+    # 前月計算ロジック
+    import datetime
+    import calendar
+    import json
+    from dateutil.relativedelta import relativedelta
+    try:
+        curr_d = datetime.datetime.strptime(month, "%Y-%m").date()
+        prev_d = curr_d - relativedelta(months=1)
+        prev_month_str = prev_d.strftime("%Y-%m")
+    except Exception:
+        prev_month_str = ""
+
+    for cust_id in target_cust_ids:
         # 既存請求書チェック（重複防止）
         existing = db.query(models.Invoice).filter_by(
             company_id=company_id, customer_id=cust_id, month=month
@@ -400,31 +605,154 @@ def generate_monthly_invoices(
             continue
 
         items = []
-        total = 0
-        for m in ms:
+        sales_total = 0
+        
+        # 産廃マニフェスト分
+        for m in cust_manifests.get(cust_id, []):
             if m.weight_kg and m.unit_price_per_kg:
                 amt = int(m.weight_kg * m.unit_price_per_kg)
             else:
                 amt = 0
-            items.append(models.InvoiceItem(
-                description=f"産廃処理: {m.waste_type or '廃棄物'} ({m.weight_kg or 0}kg)",
-                quantity=m.weight_kg or 0,
-                unit="kg",
-                unit_price=m.unit_price_per_kg or 0,
-                amount=amt,
-                manifest_id=m.id,
-            ))
-            total += amt
+            # weight_kgが設定されているもののみ請求対象とする
+            if amt > 0:
+                items.append(models.InvoiceItem(
+                    description=f"産廃: {m.waste_type or '廃棄物'} ({m.weight_kg or 0}kg) [No.{m.manifest_number}]",
+                    quantity=m.weight_kg or 0,
+                    unit="kg",
+                    unit_price=m.unit_price_per_kg or 0,
+                    amount=amt,
+                    manifest_id=m.id,
+                ))
+                sales_total += amt
 
-        tax = int(total * 0.1)
+        # 一般案件分
+        for j in cust_jobs.get(cust_id, []):
+            j_amt = j.final_price or j.estimated_price or j.price_total or 0
+            if j_amt > 0:
+                items.append(models.InvoiceItem(
+                    description=f"案件: {j.job_name or '回収作業'}",
+                    quantity=1,
+                    unit="式",
+                    unit_price=j_amt,
+                    amount=j_amt,
+                ))
+                sales_total += j_amt
+
+                if j.discount_amount and j.discount_amount > 0:
+                    items.append(models.InvoiceItem(
+                        description="値引き", quantity=1, unit="式",
+                        unit_price=-j.discount_amount, amount=-j.discount_amount
+                    ))
+                    sales_total -= j.discount_amount
+
+                if j.surcharge_amount and j.surcharge_amount > 0:
+                    items.append(models.InvoiceItem(
+                        description="追加料金", quantity=1, unit="式",
+                        unit_price=j.surcharge_amount, amount=j.surcharge_amount
+                    ))
+                    sales_total += j.surcharge_amount
+
+        # 一般廃棄物（定期契約）の固定月額・日割り計算
+        c = c_map.get(cust_id)
+        if c and c.contract_type == "subscription":
+            try:
+                fd = json.loads(c.form_data) if c.form_data else {}
+                pricing_list = fd.get("pricing_list", [])
+                end_date_str = fd.get("collection_end_date", "")
+            except:
+                pricing_list = []
+                end_date_str = ""
+
+            if pricing_list:
+                closing_day = c.billing_closing_day or 31
+                try:
+                    c_year, c_month = int(month[:4]), int(month[5:7])
+                    if closing_day >= 28:
+                        _, last_day = calendar.monthrange(c_year, c_month)
+                        p_start = datetime.date(c_year, c_month, 1)
+                        p_end = datetime.date(c_year, c_month, last_day)
+                    else:
+                        p_end = datetime.date(c_year, c_month, closing_day)
+                        if c_month == 1:
+                            p_start = datetime.date(c_year - 1, 12, closing_day + 1)
+                        else:
+                            p_start = datetime.date(c_year, c_month - 1, closing_day + 1)
+                except Exception:
+                    p_start, p_end = None, None
+
+                end_date = None
+                if end_date_str:
+                    try:
+                        end_date = datetime.datetime.strptime(end_date_str, "%Y-%m-%d").date()
+                    except:
+                        pass
+
+                if p_start and p_end:
+                    should_charge_fixed = True
+                    ratio = 1.0
+
+                    if end_date and end_date < p_start:
+                        should_charge_fixed = False
+                    elif end_date and end_date <= p_end:
+                        active_days = (end_date - p_start).days + 1
+                        total_days = (p_end - p_start).days + 1
+                        ratio = max(0.0, min(1.0, active_days / total_days))
+
+                    if should_charge_fixed:
+                        for p in pricing_list:
+                            raw_price = float(p.get("price", 0))
+                            if raw_price > 0:
+                                prorated = int(raw_price * ratio)
+                                desc = p.get("item", "定期回収諸費用")
+                                if ratio < 1.0:
+                                    desc += f" (日割: {p_start.strftime('%m/%d')}〜{end_date.strftime('%m/%d')})"
+                                
+                                items.append(models.InvoiceItem(
+                                    description=desc,
+                                    quantity=1,
+                                    unit=p.get("unit", "式"),
+                                    unit_price=prorated,
+                                    amount=prorated,
+                                ))
+                                sales_total += prorated
+
+        # 売上がなければスキップ（ただし繰越だけあるパターンは今回考慮外とする）
+        if sales_total <= 0:
+            continue
+
+        # 前月繰越の計算
+        carry_over = 0
+        if prev_month_str:
+            prev_inv = db.query(models.Invoice).options(joinedload(models.Invoice.payments)).filter_by(
+                company_id=company_id, customer_id=cust_id, month=prev_month_str
+            ).first()
+            if prev_inv:
+                paid = sum(p.amount for p in prev_inv.payments)
+                carry_over_calc = prev_inv.total_amount - paid
+                if carry_over_calc > 0:
+                    carry_over = carry_over_calc
+                    # 繰越項目として追加 (非課税扱いのため sales_totalには入れない)
+                    items.append(models.InvoiceItem(
+                        description="前回繰越額",
+                        quantity=1,
+                        unit="式",
+                        unit_price=carry_over,
+                        amount=carry_over,
+                    ))
+
+        tax = int(sales_total * 0.1)
+        # 最終請求額 = 当月売上 + 当月消費税 + 前回繰越額
+        grand_total = sales_total + tax + carry_over
+
         inv = models.Invoice(
             company_id=company_id,
             customer_id=cust_id,
             month=month,
-            total_amount=total + tax,
+            total_amount=grand_total,
             tax_amount=tax,
             status="draft",
-            due_date=body.due_date or _auto_due_date(customer, month),
+            due_date=body.due_date or _auto_due_date(c_map[cust_id], month),
+            notes=f"【内訳】今回請求額: ¥{(sales_total+tax):,}, 前回繰越: ¥{carry_over:,}" if carry_over > 0 else "月次一括生成",
         )
         db.add(inv)
         db.flush()

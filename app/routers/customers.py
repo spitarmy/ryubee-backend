@@ -22,6 +22,31 @@ class CustomerCreate(BaseModel):
     form_data: str = "{}"
 
 
+class CustomerHistoryCreate(BaseModel):
+    event_type: str = "note"
+    description: str
+
+
+class CustomerHistoryOut(BaseModel):
+    id: str
+    customer_id: str
+    event_type: str
+    description: str
+    created_at: str
+
+    model_config = {"from_attributes": True}
+
+    @classmethod
+    def from_orm_obj(cls, obj: models.CustomerHistory):
+        return cls(
+            id=str(obj.id),
+            customer_id=str(obj.customer_id),
+            event_type=str(obj.event_type),
+            description=str(obj.description),
+            created_at=obj.created_at.isoformat() if obj.created_at else ""
+        )
+
+
 class CustomerUpdate(BaseModel):
     name: str | None = None
     address: str | None = None
@@ -153,3 +178,42 @@ def delete_customer(
         raise HTTPException(404, "顧客が見つかりません")
     db.delete(cust)
     db.commit()
+
+
+@router.get("/{customer_id}/history")
+def list_customer_history(
+    customer_id: str,
+    current_user: models.User = Depends(auth.get_current_user),
+    db: Session = Depends(get_db),
+):
+    cust = db.query(models.Customer).filter_by(
+        id=customer_id, company_id=current_user.company_id
+    ).first()
+    if not cust:
+        raise HTTPException(404, "顧客が見つかりません")
+    
+    return [CustomerHistoryOut.from_orm_obj(h).model_dump() for h in cust.history_logs]
+
+
+@router.post("/{customer_id}/history", response_model=CustomerHistoryOut)
+def add_customer_history(
+    customer_id: str,
+    body: CustomerHistoryCreate,
+    current_user: models.User = Depends(auth.get_current_user),
+    db: Session = Depends(get_db),
+):
+    cust = db.query(models.Customer).filter_by(
+        id=customer_id, company_id=current_user.company_id
+    ).first()
+    if not cust:
+        raise HTTPException(404, "顧客が見つかりません")
+    
+    new_log = models.CustomerHistory(
+        customer_id=customer_id,
+        event_type=body.event_type,
+        description=body.description
+    )
+    db.add(new_log)
+    db.commit()
+    db.refresh(new_log)
+    return CustomerHistoryOut.from_orm_obj(new_log)

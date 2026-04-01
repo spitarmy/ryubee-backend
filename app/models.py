@@ -170,7 +170,19 @@ class Customer(Base):
     company: Mapped["Company"] = relationship(back_populates="customers")
     manifests: Mapped[list["Manifest"]] = relationship(back_populates="customer")
     invoices: Mapped[list["Invoice"]] = relationship(back_populates="customer")
+    history_logs: Mapped[list["CustomerHistory"]] = relationship("CustomerHistory", back_populates="customer", cascade="all, delete-orphan", order_by="desc(CustomerHistory.created_at)")
 
+
+class CustomerHistory(Base):
+    __tablename__ = "customer_history"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    customer_id: Mapped[str] = mapped_column(String, ForeignKey("customers.id"), nullable=False)
+    event_type: Mapped[str] = mapped_column(String(50), default="note")  # inquiry, claim, note, collection
+    description: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    
+    customer: Mapped["Customer"] = relationship("Customer", back_populates="history_logs")
 
 class Manifest(Base):
     __tablename__ = "manifests"
@@ -264,6 +276,27 @@ class Payment(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     invoice: Mapped["Invoice"] = relationship(back_populates="payments")
+
+
+class DailyReport(Base):
+    __tablename__ = "daily_reports"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    company_id: Mapped[str] = mapped_column(String, ForeignKey("companies.id"), nullable=False)
+    driver_id: Mapped[str] = mapped_column(String, ForeignKey("users.id"), nullable=False)
+    customer_id: Mapped[str | None] = mapped_column(String, ForeignKey("customers.id"), nullable=True)
+    customer_name: Mapped[str] = mapped_column(String(255), default="")
+    
+    report_date: Mapped[str] = mapped_column(String(20), nullable=False) # YYYY-MM-DD
+    bag_count: Mapped[int] = mapped_column(Integer, default=0)
+    weight_kg: Mapped[float] = mapped_column(Float, default=0.0)
+    notes: Mapped[str] = mapped_column(Text, default="")
+    
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+    driver_rel: Mapped["User"] = relationship(foreign_keys=[driver_id])
+    customer_rel: Mapped["Customer | None"] = relationship(foreign_keys=[customer_id])
 
 
 class Route(Base):
