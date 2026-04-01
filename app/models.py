@@ -81,6 +81,9 @@ class CompanySettings(Base):
     license_expiry_date: Mapped[str | None] = mapped_column(String(20), nullable=True)
     # 決算月（1-12）
     fiscal_year_end_month: Mapped[int] = mapped_column(Integer, default=3)
+    # 会社ロゴ・電子角印（Base64）
+    company_logo: Mapped[str] = mapped_column(Text, default="")
+    company_stamp: Mapped[str] = mapped_column(Text, default="")
 
     # メールテンプレート（未入金リマインド用）
     unpaid_email_subject: Mapped[str] = mapped_column(String(255), default="【重要】未入金のお知らせ")
