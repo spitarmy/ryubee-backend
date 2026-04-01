@@ -31,6 +31,7 @@ class JobCreate(BaseModel):
 class JobUpdate(BaseModel):
     job_name: str | None = None
     customer_name: str | None = None
+    customer_id: str | None = None
     address: str | None = None
     work_date: str | None = None
     notes: str | None = None
@@ -44,6 +45,11 @@ class JobUpdate(BaseModel):
     assigned_to: str | None = None
     photos: str | None = None  # JSON array string
     form_data: str | None = None
+    estimated_price: int | None = None
+    final_price: int | None = None
+    discount_amount: int | None = None
+    surcharge_amount: int | None = None
+    price_notes: str | None = None
 
 
 class JobOut(BaseModel):
