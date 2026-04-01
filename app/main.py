@@ -10,6 +10,19 @@ from app.routers import (
 # テーブルを自動作成（本番ではAlembicマイグレーション推奨）
 Base.metadata.create_all(bind=engine)
 
+# 起動時の自動マイグレーション（新カラム追加）
+try:
+    with engine.connect() as _conn:
+        _conn.execute(__import__('sqlalchemy').text(
+            "ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS company_logo TEXT DEFAULT ''"
+        ))
+        _conn.execute(__import__('sqlalchemy').text(
+            "ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS company_stamp TEXT DEFAULT ''"
+        ))
+        _conn.commit()
+except Exception as _e:
+    print(f"Auto-migration skipped: {_e}")
+
 app = FastAPI(
     title="Ryu兵衛 API",
     description="立米AI現場見積ツール バックエンドAPI",
