@@ -19,6 +19,9 @@ try:
         _conn.execute(__import__('sqlalchemy').text(
             "ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS company_stamp TEXT DEFAULT ''"
         ))
+        _conn.execute(__import__('sqlalchemy').text(
+            "ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS general_waste_pricing TEXT DEFAULT '{}'"
+        ))
         _conn.commit()
 except Exception as _e:
     print(f"Auto-migration skipped: {_e}")
