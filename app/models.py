@@ -380,3 +380,92 @@ class FreeeIntegration(Base):
     token_expiry: Mapped[str | None] = mapped_column(String(30), nullable=True)
     freee_company_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+# ── 車両管理 ──────────────────────────────────────────────
+class Vehicle(Base):
+    __tablename__ = "vehicles"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    company_id: Mapped[str] = mapped_column(String, ForeignKey("companies.id"), nullable=False)
+    # ナンバープレート
+    plate_area: Mapped[str] = mapped_column(String(50), default="")        # 京都
+    plate_class: Mapped[str] = mapped_column(String(20), default="")       # 831
+    plate_kana: Mapped[str] = mapped_column(String(10), default="")        # の
+    plate_number: Mapped[str] = mapped_column(String(20), default="")      # 9
+    # 車両情報
+    vehicle_number: Mapped[str] = mapped_column(String(20), default="")    # 号車
+    maker: Mapped[str] = mapped_column(String(100), default="")            # メーカー
+    code: Mapped[str] = mapped_column(String(20), default="")              # コード (A, B, C...)
+    vehicle_type: Mapped[str] = mapped_column(String(100), default="")     # 車種
+    max_capacity_kg: Mapped[int | None] = mapped_column(Integer, nullable=True)  # 最大積載量 (kg)
+    driver_name: Mapped[str] = mapped_column(String(100), default="")      # 担当
+    first_registration: Mapped[str | None] = mapped_column(String(20), nullable=True)  # 初年度登録
+    inspection_expiry: Mapped[str | None] = mapped_column(String(20), nullable=True)   # 車検満了日
+    tire_replacement_date: Mapped[str | None] = mapped_column(String(20), nullable=True)  # タイヤ交換日
+    notes: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+# ── 許可証管理 ────────────────────────────────────────────
+class Permit(Base):
+    __tablename__ = "permits"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    company_id: Mapped[str] = mapped_column(String, ForeignKey("companies.id"), nullable=False)
+    prefecture: Mapped[str] = mapped_column(String(100), default="")       # 自治体名
+    permit_type: Mapped[str] = mapped_column(String(100), default="")      # 許可種類 (産廃/特管/入札参加資格等)
+    permit_number: Mapped[str] = mapped_column(String(100), default="")    # 許可番号
+    expiry_date: Mapped[str | None] = mapped_column(String(20), nullable=True)  # 許可有効年月日
+    application_month: Mapped[str] = mapped_column(String(20), default="") # 申請月
+    notes: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+# ── 産廃3社契約管理 ───────────────────────────────────────
+class WasteContract(Base):
+    __tablename__ = "waste_contracts"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    company_id: Mapped[str] = mapped_column(String, ForeignKey("companies.id"), nullable=False)
+    contract_name: Mapped[str] = mapped_column(String(255), default="")    # 契約名
+    contractor_name: Mapped[str] = mapped_column(String(255), default="")  # 排出事業者名
+    disposal_company: Mapped[str] = mapped_column(String(255), default="") # 処分業者名
+    transport_company: Mapped[str] = mapped_column(String(255), default="")# 運搬業者名
+    waste_type: Mapped[str] = mapped_column(String(255), default="")       # 廃棄物種類
+    contract_date: Mapped[str | None] = mapped_column(String(20), nullable=True)  # 契約日
+    expiry_date: Mapped[str | None] = mapped_column(String(20), nullable=True)    # 契約有効期限
+    document_url: Mapped[str] = mapped_column(Text, default="")            # 契約書URL
+    notes: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+# ── 車両履歴（修理歴・事故歴・車検証） ───────────────────
+class VehicleRecord(Base):
+    __tablename__ = "vehicle_records"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    vehicle_id: Mapped[str] = mapped_column(String, ForeignKey("vehicles.id"), nullable=False)
+    record_type: Mapped[str] = mapped_column(String(50), default="repair")  # repair/accident/inspection
+    record_date: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    title: Mapped[str] = mapped_column(String(255), default="")
+    description: Mapped[str] = mapped_column(Text, default="")
+    file_url: Mapped[str] = mapped_column(Text, default="")   # 画像/PDF保存パス
+    cost: Mapped[int | None] = mapped_column(Integer, nullable=True)  # 費用
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+# ── 研修資料管理 ──────────────────────────────────────────
+class TrainingMaterial(Base):
+    __tablename__ = "training_materials"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    company_id: Mapped[str] = mapped_column(String, ForeignKey("companies.id"), nullable=False)
+    title: Mapped[str] = mapped_column(String(255), default="")
+    file_url: Mapped[str] = mapped_column(Text, default="")
+    file_type: Mapped[str] = mapped_column(String(50), default="")  # pdf/image
+    notes: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

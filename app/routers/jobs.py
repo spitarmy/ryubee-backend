@@ -167,7 +167,7 @@ def pipeline_view(
     db: Session = Depends(get_db),
 ):
     """営業パイプライン: カンバン形式でステージ別グルーピング"""
-    stages = ["inquiry", "estimate", "negotiation", "contract", "scheduled", "completed", "lost"]
+    stages = ["inquiry", "estimate", "negotiation", "contract", "scheduled", "waiting_manifest", "completed", "lost"]
     jobs = db.query(models.Job).filter_by(
         company_id=current_user.company_id
     ).order_by(models.Job.updated_at.desc()).all()
