@@ -4,13 +4,20 @@ import json
 import base64
 from datetime import datetime, date
 from typing import Any
-from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, Form
+from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, Form, Response
 from pydantic import BaseModel
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import func
 from openai import AsyncOpenAI
 from app.database import get_db
 from app import models, auth
+from jinja2 import Environment, FileSystemLoader
+from playwright.async_api import async_playwright
+import smtplib
+from email.mime.multipart import MIMEMultipart
+from email.mime.base import MIMEBase
+from email.mime.text import MIMEText
+from email import encoders
 
 router = APIRouter(prefix="/v1/invoices", tags=["invoices"])
 
@@ -1120,6 +1127,125 @@ def record_cash_collection(
         joinedload(models.Invoice.payments),
         joinedload(models.Invoice.customer),
     ).filter_by(id=inv.id).first()
+    return _invoice_to_out(inv)
+
+
+class SendInvoiceRequest(BaseModel):
+    subject: str = "【ご請求書】送付のご案内"
+    body: str = "いつも大変お世話になっております。\n添付の通り、ご請求書を送付いたします。\nご確認のほどよろしくお願い申し上げます。"
+
+
+@router.get("/{invoice_id}/pdf")
+async def get_invoice_pdf(
+    invoice_id: str,
+    current_user: models.User = Depends(auth.get_current_user),
+    db: Session = Depends(get_db),
+):
+    inv = db.query(models.Invoice).options(
+        joinedload(models.Invoice.items),
+        joinedload(models.Invoice.payments),
+        joinedload(models.Invoice.customer),
+    ).filter_by(id=invoice_id, company_id=current_user.company_id).first()
+    if not inv:
+        raise HTTPException(404, "請求書が見つかりません")
+    company = db.query(models.Company).filter_by(id=current_user.company_id).first()
+    settings = db.query(models.CompanySettings).filter_by(company_id=current_user.company_id).first()
+
+    # Jinja2 render
+    env = Environment(loader=FileSystemLoader(os.path.join(os.path.dirname(__file__), "..", "templates")))
+    template = env.get_template("invoice.html")
+    html_content = template.render(
+        invoice=inv,
+        customer=inv.customer,
+        company=company,
+        settings=settings,
+        today=datetime.now().strftime("%Y年%m月%d日")
+    )
+
+    # Playwright PDF logic
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(headless=True)
+        page = await browser.new_page()
+        await page.set_content(html_content, wait_until="networkidle")
+        pdf_bytes = await page.pdf(format="A4", print_background=True, margin={"top": "20mm", "bottom": "20mm", "left": "20mm", "right": "20mm"})
+        await browser.close()
+
+    return Response(content=pdf_bytes, media_type="application/pdf")
+
+
+@router.post("/{invoice_id}/send", response_model=InvoiceOut)
+async def send_invoice_email(
+    invoice_id: str,
+    body: SendInvoiceRequest,
+    current_user: models.User = Depends(auth.get_current_user),
+    db: Session = Depends(get_db),
+):
+    inv = db.query(models.Invoice).options(
+        joinedload(models.Invoice.items),
+        joinedload(models.Invoice.payments),
+        joinedload(models.Invoice.customer),
+    ).filter_by(id=invoice_id, company_id=current_user.company_id).first()
+
+    if not inv:
+        raise HTTPException(404, "請求書が見つかりません")
+    if not inv.customer or not inv.customer.email:
+        raise HTTPException(400, "顧客のメールアドレスが登録されていません")
+
+    company = db.query(models.Company).filter_by(id=current_user.company_id).first()
+    settings = db.query(models.CompanySettings).filter_by(company_id=current_user.company_id).first()
+
+    # Generate PDF in memory
+    env = Environment(loader=FileSystemLoader(os.path.join(os.path.dirname(__file__), "..", "templates")))
+    template = env.get_template("invoice.html")
+    html_content = template.render(
+        invoice=inv,
+        customer=inv.customer,
+        company=company,
+        settings=settings,
+        today=datetime.now().strftime("%Y年%m月%d日")
+    )
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(headless=True)
+        page = await browser.new_page()
+        await page.set_content(html_content, wait_until="networkidle")
+        pdf_bytes = await page.pdf(format="A4", print_background=True, margin={"top": "20mm", "bottom": "20mm", "left": "20mm", "right": "20mm"})
+        await browser.close()
+
+    # Email properties
+    smtp_host = os.getenv("SMTP_HOST", "smtp.gmail.com")
+    smtp_port = int(os.getenv("SMTP_PORT", "587"))
+    smtp_user = os.getenv("SMTP_USER", "")
+    smtp_pass = os.getenv("SMTP_PASS", "")
+
+    if smtp_user and smtp_pass:
+        msg = MIMEMultipart()
+        msg['From'] = f"{company.name} <{smtp_user}>"
+        msg['To'] = inv.customer.email
+        msg['Subject'] = body.subject
+        msg.attach(MIMEText(body.body, 'plain'))
+
+        part = MIMEBase('application', 'octet-stream')
+        part.set_payload(pdf_bytes)
+        encoders.encode_base64(part)
+        filename = f"Invoice_{inv.month}_{inv.customer.customer_name}.pdf".replace(" ", "_")
+        
+        # utf-8 encode parameter for non-ascii attachment filenames in some mail clients could be added,
+        # but modern clients usually handle RFC2231 / utf8 well if given cleanly.
+        part.add_header('Content-Disposition', f'attachment; filename="{filename}"')
+        msg.attach(part)
+
+        try:
+            server = smtplib.SMTP(smtp_host, smtp_port)
+            server.starttls()
+            server.login(smtp_user, smtp_pass)
+            server.send_message(msg)
+            server.quit()
+        except Exception as e:
+            raise HTTPException(500, f"メール送信に失敗しました: {e}")
+
+    inv.sent_at = datetime.now().isoformat()
+    db.commit()
+    db.refresh(inv)
     return _invoice_to_out(inv)
 
 
