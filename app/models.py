@@ -167,6 +167,12 @@ class Customer(Base):
     payment_due_month_offset: Mapped[int] = mapped_column(Integer, default=1)
     # 支払日 (1-31, 31=月末払い, 20=20日払い)
     payment_due_day: Mapped[int] = mapped_column(Integer, default=31)
+    # ── 口座振替用 ──
+    bank_code: Mapped[str] = mapped_column(String(4), default="")        # 銀行コード (4桁)
+    branch_code: Mapped[str] = mapped_column(String(3), default="")      # 支店コード (3桁)
+    account_type: Mapped[str] = mapped_column(String(1), default="1")    # 1=普通, 2=当座
+    account_number: Mapped[str] = mapped_column(String(7), default="")   # 口座番号 (7桁)
+    account_holder: Mapped[str] = mapped_column(String(30), default="")  # 口座名義 (カナ)
     # ── 山文様 拡張フォーム用 ──
     form_data: Mapped[str] = mapped_column(Text, default="{}")
     

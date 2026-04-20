@@ -19,6 +19,11 @@ class CustomerCreate(BaseModel):
     billing_closing_day: int = 31
     payment_due_month_offset: int = 1
     payment_due_day: int = 31
+    bank_code: str = ""
+    branch_code: str = ""
+    account_type: str = "1"
+    account_number: str = ""
+    account_holder: str = ""
     form_data: str = "{}"
 
 
@@ -59,6 +64,11 @@ class CustomerUpdate(BaseModel):
     billing_closing_day: int | None = None
     payment_due_month_offset: int | None = None
     payment_due_day: int | None = None
+    bank_code: str | None = None
+    branch_code: str | None = None
+    account_type: str | None = None
+    account_number: str | None = None
+    account_holder: str | None = None
     form_data: str | None = None
 
 
@@ -76,6 +86,11 @@ class CustomerOut(BaseModel):
     billing_closing_day: int = 31
     payment_due_month_offset: int = 1
     payment_due_day: int = 31
+    bank_code: str = ""
+    branch_code: str = ""
+    account_type: str = "1"
+    account_number: str = ""
+    account_holder: str = ""
     form_data: str = "{}"
     created_at: str
 
@@ -97,6 +112,11 @@ class CustomerOut(BaseModel):
             billing_closing_day=int(obj.billing_closing_day) if obj.billing_closing_day is not None else 31,
             payment_due_month_offset=int(obj.payment_due_month_offset) if obj.payment_due_month_offset is not None else 1,
             payment_due_day=int(obj.payment_due_day) if obj.payment_due_day is not None else 31,
+            bank_code=str(getattr(obj, 'bank_code', '') or ''),
+            branch_code=str(getattr(obj, 'branch_code', '') or ''),
+            account_type=str(getattr(obj, 'account_type', '1') or '1'),
+            account_number=str(getattr(obj, 'account_number', '') or ''),
+            account_holder=str(getattr(obj, 'account_holder', '') or ''),
             form_data=str(obj.form_data) if obj.form_data else "{}",
             created_at=obj.created_at.isoformat() if obj.created_at else ""
         )

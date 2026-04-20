@@ -126,6 +126,12 @@ class UnpaidAlertOut(BaseModel):
     days_overdue: int
     email: str | None = None
     last_reminded_at: str | None = None
+    consecutive_unpaid_count: int = 1  # 連続未納回数
+
+
+class CarryoverRequest(BaseModel):
+    source_month: str  # 繰越元月 YYYY-MM
+    target_month: str  # 繰越先月 YYYY-MM
 
 
 # ── Helpers ────────────────────────────────────────────
@@ -420,6 +426,15 @@ def unpaid_alerts(
         ))
 
     alerts.sort(key=lambda a: (-int(a.is_fiscal_crossover), -a.days_overdue))
+
+    # 連続未納回数を計算（同一顧客の未払い月数）
+    from collections import Counter
+    customer_unpaid_months = Counter()
+    for a in alerts:
+        customer_unpaid_months[a.customer_id] += 1
+    for a in alerts:
+        a.consecutive_unpaid_count = customer_unpaid_months[a.customer_id]
+
     return alerts
 
 
@@ -950,6 +965,106 @@ def _auto_due_date(customer, month: str) -> str | None:
     last_day = calendar.monthrange(pay_year, pay_month)[1]
     actual_due_day = min(due_day, last_day)
     return f"{pay_year}-{pay_month:02d}-{actual_due_day:02d}"
+
+
+# ── 繰越処理 ──────────────────────────────────────────────
+@router.post("/carryover", response_model=list[InvoiceOut])
+def carryover_invoices(
+    body: CarryoverRequest,
+    current_user: models.User = Depends(auth.get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    指定月の未入金請求書を検索し、差額を次月請求書に「前月繰越」として追加。
+    繰越元の請求書ステータスを 'carried_over' に更新。
+    """
+    company_id = current_user.company_id
+
+    # 繰越元月の未入金請求書を取得
+    source_invoices = db.query(models.Invoice).options(
+        joinedload(models.Invoice.items),
+        joinedload(models.Invoice.payments),
+        joinedload(models.Invoice.customer),
+    ).filter(
+        models.Invoice.company_id == company_id,
+        models.Invoice.month == body.source_month,
+        models.Invoice.status.in_(["sent", "partial", "overdue", "draft"]),
+    ).all()
+
+    # 重複排除
+    seen = set()
+    unique_sources = []
+    for inv in source_invoices:
+        if inv.id not in seen:
+            seen.add(inv.id)
+            unique_sources.append(inv)
+
+    results = []
+    for src in unique_sources:
+        paid = sum(p.amount for p in src.payments)
+        remaining = src.total_amount - paid
+        if remaining <= 0:
+            continue  # 完済済みはスキップ
+
+        # 繰越先月の既存請求書を検索
+        target_inv = db.query(models.Invoice).options(
+            joinedload(models.Invoice.items),
+            joinedload(models.Invoice.payments),
+            joinedload(models.Invoice.customer),
+        ).filter_by(
+            company_id=company_id,
+            customer_id=src.customer_id,
+            month=body.target_month,
+        ).first()
+
+        if not target_inv:
+            # 新しい請求書を作成
+            target_inv = models.Invoice(
+                company_id=company_id,
+                customer_id=src.customer_id,
+                month=body.target_month,
+                status="draft",
+                due_date=_auto_due_date(src.customer, body.target_month),
+            )
+            db.add(target_inv)
+            db.flush()
+
+        # 繰越の明細を追加
+        carryover_item = models.InvoiceItem(
+            invoice_id=target_inv.id,
+            description=f"前月繰越 ({body.source_month})",
+            quantity=1,
+            unit="式",
+            unit_price=remaining,
+            amount=remaining,
+        )
+        db.add(carryover_item)
+
+        # 繰越先の合計再計算
+        existing_subtotal = sum(it.amount for it in target_inv.items) if target_inv.items else 0
+        new_subtotal = existing_subtotal + remaining
+        target_inv.tax_amount = int(new_subtotal * 0.1)
+        target_inv.total_amount = new_subtotal + target_inv.tax_amount
+
+        # 繰越元のステータスを更新
+        src.status = "carried_over"
+        src.notes = (src.notes or "") + f"\n※ {body.target_month}に繰越済 (残額¥{remaining:,})"
+
+        results.append(target_inv)
+
+    db.commit()
+
+    # リロードして返す
+    out = []
+    for inv in results:
+        loaded = db.query(models.Invoice).options(
+            joinedload(models.Invoice.items),
+            joinedload(models.Invoice.payments),
+            joinedload(models.Invoice.customer),
+        ).filter_by(id=inv.id).first()
+        out.append(_invoice_to_out(loaded))
+
+    return out
 
 
 # ── 見積→請求書変換 ──────────────────────────────────────

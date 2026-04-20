@@ -23,6 +23,15 @@ try:
         _conn.execute(__import__('sqlalchemy').text(
             "ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS general_waste_pricing TEXT DEFAULT '{}'"
         ))
+        # 口座振替用フィールド
+        for col in ['bank_code VARCHAR(4)', 'branch_code VARCHAR(3)', 'account_type VARCHAR(1)', 'account_number VARCHAR(7)', 'account_holder VARCHAR(30)']:
+            col_name = col.split()[0]
+            try:
+                _conn.execute(__import__('sqlalchemy').text(
+                    f"ALTER TABLE customers ADD COLUMN {col_name} {col.split(' ', 1)[1]} DEFAULT ''"
+                ))
+            except Exception:
+                pass
         _conn.commit()
 except Exception as _e:
     print(f"Auto-migration skipped: {_e}")
@@ -72,6 +81,12 @@ app.include_router(templates.router)
 app.include_router(volume.router)
 app.include_router(daily_reports.router)
 app.include_router(company_data.router)
+
+try:
+    from app.routers import auto_debit
+    app.include_router(auto_debit.router)
+except ImportError as _e:
+    print(f"auto_debit router not loaded: {_e}")
 
 
 @app.get("/")
