@@ -25,6 +25,7 @@ class CustomerCreate(BaseModel):
     account_number: str = ""
     account_holder: str = ""
     form_data: str = "{}"
+    assigned_user_id: str | None = None
 
 
 class CustomerHistoryCreate(BaseModel):
@@ -70,6 +71,7 @@ class CustomerUpdate(BaseModel):
     account_number: str | None = None
     account_holder: str | None = None
     form_data: str | None = None
+    assigned_user_id: str | None = None
 
 
 class CustomerOut(BaseModel):
@@ -92,6 +94,8 @@ class CustomerOut(BaseModel):
     account_number: str = ""
     account_holder: str = ""
     form_data: str = "{}"
+    assigned_user_id: str | None = None
+    assigned_user_name: str | None = None
     created_at: str
 
     model_config = {"from_attributes": True}
@@ -118,6 +122,8 @@ class CustomerOut(BaseModel):
             account_number=str(getattr(obj, 'account_number', '') or ''),
             account_holder=str(getattr(obj, 'account_holder', '') or ''),
             form_data=str(obj.form_data) if obj.form_data else "{}",
+            assigned_user_id=str(obj.assigned_user_id) if getattr(obj, 'assigned_user_id', None) else None,
+            assigned_user_name=str(obj.assignee.name) if getattr(obj, 'assignee', None) else None,
             created_at=obj.created_at.isoformat() if obj.created_at else ""
         )
 
@@ -125,6 +131,7 @@ class CustomerOut(BaseModel):
 @router.get("")
 def list_customers(
     search: str | None = Query(None, description="名前で検索"),
+    assigned_user_id: str | None = Query(None, description="担当者IDで検索"),
     limit: int = Query(500, ge=1, le=2000),
     offset: int = Query(0, ge=0),
     db: Session = Depends(get_db),
@@ -136,6 +143,10 @@ def list_customers(
         )
         if search:
             q = q.filter(models.Customer.name.ilike(f"%{search}%"))
+        
+        if assigned_user_id:
+            q = q.filter(models.Customer.assigned_user_id == assigned_user_id)
+            
         total = q.count()
         customers = q.order_by(models.Customer.created_at.desc()).offset(offset).limit(limit).all()
         return {
@@ -170,6 +181,7 @@ def create_customer(
         payment_due_month_offset=body.payment_due_month_offset,
         payment_due_day=body.payment_due_day,
         form_data=body.form_data,
+        assigned_user_id=body.assigned_user_id,
     )
     db.add(new_cust)
     db.commit()

@@ -165,6 +165,7 @@ class Customer(Base):
     contact_person: Mapped[str] = mapped_column(String(255), default="")
     notes: Mapped[str] = mapped_column(Text, default="")
     contract_expiry_date: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    assigned_user_id: Mapped[str | None] = mapped_column(String, ForeignKey("users.id"), nullable=True)
     # ── 締め払い設定 ──
     # 締め日 (1-31, 31=月末締め, 20=20日締め, 15=15日締め)
     billing_closing_day: Mapped[int] = mapped_column(Integer, default=31)
@@ -184,6 +185,7 @@ class Customer(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     company: Mapped["Company"] = relationship(back_populates="customers")
+    assignee: Mapped["User | None"] = relationship(foreign_keys=[assigned_user_id])
     manifests: Mapped[list["Manifest"]] = relationship(back_populates="customer")
     invoices: Mapped[list["Invoice"]] = relationship(back_populates="customer")
     history_logs: Mapped[list["CustomerHistory"]] = relationship("CustomerHistory", back_populates="customer", cascade="all, delete-orphan", order_by="desc(CustomerHistory.created_at)")
