@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime, timezone
-from sqlalchemy import String, Integer, Float, Text, DateTime, ForeignKey, Boolean
+from sqlalchemy import String, Integer, Float, Text, DateTime, ForeignKey, Boolean, Index
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.database import Base
 
@@ -148,6 +148,11 @@ class Job(Base):
 
 class Customer(Base):
     __tablename__ = "customers"
+    __table_args__ = (
+        Index('ix_customers_company_name', 'company_id', 'name'),
+        Index('ix_customers_company_contract', 'company_id', 'contract_type'),
+        Index('ix_customers_account_number', 'account_number'),
+    )
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     company_id: Mapped[str] = mapped_column(String, ForeignKey("companies.id"), nullable=False)
@@ -197,6 +202,10 @@ class CustomerHistory(Base):
 
 class Manifest(Base):
     __tablename__ = "manifests"
+    __table_args__ = (
+        Index('ix_manifests_customer_status', 'customer_id', 'status'),
+        Index('ix_manifests_customer_category', 'customer_id', 'waste_category'),
+    )
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     job_id: Mapped[str | None] = mapped_column(String, ForeignKey("jobs.job_id"), nullable=True)
@@ -232,6 +241,12 @@ class ItemTemplate(Base):
 
 class Invoice(Base):
     __tablename__ = "invoices"
+    __table_args__ = (
+        Index('ix_invoices_company_month', 'company_id', 'month'),
+        Index('ix_invoices_company_status', 'company_id', 'status'),
+        Index('ix_invoices_customer', 'customer_id'),
+        Index('ix_invoices_company_month_status', 'company_id', 'month', 'status'),
+    )
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     company_id: Mapped[str] = mapped_column(String, ForeignKey("companies.id"), nullable=False)
@@ -259,6 +274,9 @@ class Invoice(Base):
 
 class InvoiceItem(Base):
     __tablename__ = "invoice_items"
+    __table_args__ = (
+        Index('ix_invoice_items_invoice', 'invoice_id'),
+    )
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     invoice_id: Mapped[str] = mapped_column(String, ForeignKey("invoices.id"), nullable=False)
@@ -276,6 +294,10 @@ class InvoiceItem(Base):
 
 class Payment(Base):
     __tablename__ = "payments"
+    __table_args__ = (
+        Index('ix_payments_invoice', 'invoice_id'),
+        Index('ix_payments_company', 'company_id'),
+    )
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     invoice_id: Mapped[str] = mapped_column(String, ForeignKey("invoices.id"), nullable=False)

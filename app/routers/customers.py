@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from app.database import get_db
@@ -124,18 +124,29 @@ class CustomerOut(BaseModel):
 
 @router.get("")
 def list_customers(
+    search: str | None = Query(None, description="名前で検索"),
+    limit: int = Query(500, ge=1, le=2000),
+    offset: int = Query(0, ge=0),
     db: Session = Depends(get_db),
     current_user: models.User = Depends(auth.get_current_user),
 ):
     try:
-        customers = db.query(models.Customer).filter_by(
+        q = db.query(models.Customer).filter_by(
             company_id=current_user.company_id
-        ).order_by(models.Customer.created_at.desc()).all()
-        return [CustomerOut.from_orm_obj(c).model_dump() for c in customers]
+        )
+        if search:
+            q = q.filter(models.Customer.name.ilike(f"%{search}%"))
+        total = q.count()
+        customers = q.order_by(models.Customer.created_at.desc()).offset(offset).limit(limit).all()
+        return {
+            "items": [CustomerOut.from_orm_obj(c).model_dump() for c in customers],
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+        }
     except Exception as e:
         import traceback
         error_info = traceback.format_exc()
-        # Raise 400 instead of 500 so CORS headers are not dropped by FastAPI!
         raise HTTPException(status_code=400, detail=f"DEBUG ERROR: {str(e)}\n\n{error_info}")
 
 

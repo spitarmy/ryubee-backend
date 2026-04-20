@@ -173,6 +173,8 @@ def list_invoices(
     month: str | None = Query(None),
     status: str | None = Query(None),
     customer_id: str | None = Query(None),
+    limit: int = Query(1000, ge=1, le=5000),
+    offset: int = Query(0, ge=0),
     current_user: models.User = Depends(auth.get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -187,7 +189,7 @@ def list_invoices(
         q = q.filter(models.Invoice.status == status)
     if customer_id:
         q = q.filter(models.Invoice.customer_id == customer_id)
-    invoices = q.order_by(models.Invoice.month.desc(), models.Invoice.created_at.desc()).all()
+    invoices = q.order_by(models.Invoice.month.desc(), models.Invoice.created_at.desc()).offset(offset).limit(limit).all()
     # deduplicate due to joinedload
     seen = set()
     unique = []

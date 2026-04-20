@@ -11,27 +11,27 @@ from app.routers import (
 # テーブルを自動作成（本番ではAlembicマイグレーション推奨）
 Base.metadata.create_all(bind=engine)
 
-# 起動時の自動マイグレーション（新カラム追加）
+# 起動時の自動マイグレーション（新カラム追加 — PostgreSQL互換）
 try:
     with engine.connect() as _conn:
-        _conn.execute(__import__('sqlalchemy').text(
-            "ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS company_logo TEXT DEFAULT ''"
-        ))
-        _conn.execute(__import__('sqlalchemy').text(
-            "ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS company_stamp TEXT DEFAULT ''"
-        ))
-        _conn.execute(__import__('sqlalchemy').text(
-            "ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS general_waste_pricing TEXT DEFAULT '{}'"
-        ))
-        # 口座振替用フィールド
-        for col in ['bank_code VARCHAR(4)', 'branch_code VARCHAR(3)', 'account_type VARCHAR(1)', 'account_number VARCHAR(7)', 'account_holder VARCHAR(30)']:
-            col_name = col.split()[0]
+        _sa = __import__('sqlalchemy')
+        # 各カラム追加を個別にtry/exceptで実行（既に存在する場合はスキップ）
+        _migrations = [
+            ("company_settings", "company_logo", "TEXT DEFAULT ''"),
+            ("company_settings", "company_stamp", "TEXT DEFAULT ''"),
+            ("company_settings", "general_waste_pricing", "TEXT DEFAULT '{}'"),
+            ("customers", "bank_code", "VARCHAR(4) DEFAULT ''"),
+            ("customers", "branch_code", "VARCHAR(3) DEFAULT ''"),
+            ("customers", "account_type", "VARCHAR(1) DEFAULT '1'"),
+            ("customers", "account_number", "VARCHAR(7) DEFAULT ''"),
+            ("customers", "account_holder", "VARCHAR(30) DEFAULT ''"),
+        ]
+        for _table, _col, _coltype in _migrations:
             try:
-                _conn.execute(__import__('sqlalchemy').text(
-                    f"ALTER TABLE customers ADD COLUMN {col_name} {col.split(' ', 1)[1]} DEFAULT ''"
-                ))
+                _conn.execute(_sa.text(f"ALTER TABLE {_table} ADD COLUMN {_col} {_coltype}"))
             except Exception:
-                pass
+                _conn.rollback()
+                continue
         _conn.commit()
 except Exception as _e:
     print(f"Auto-migration skipped: {_e}")
