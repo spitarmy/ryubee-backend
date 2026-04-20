@@ -171,12 +171,15 @@ def seen_filter(items, seen):
 # ── 振替結果取込 ──────────────────────────────────────────
 FAILURE_REASONS = {
     "1": "残高不足",
-    "2": "取引無し",
-    "3": "預金者修正",
-    "4": "仮預金書無し",
-    "5": "委託者修正",
+    "2": "取引なし",
+    "3": "預金者停止",
+    "4": "依頼書無し",
+    "8": "委託者停止",
     "9": "その他",
 }
+
+# コード1(残高不足)以外は即時アラート。コード1は2回連続でアラート。
+IMMEDIATE_ALERT_CODES = {"2", "3", "4", "8", "9"}
 
 
 @router.post("/import-result")
@@ -188,6 +191,10 @@ async def import_debit_result(
     """
     口座振替結果CSVを取り込み、成功分は自動入金処理、不能分は理由付きで返す。
     CSV形式: 振替日, 銀行コード, 支店コード, 口座番号, 口座名義, 振替金額, 結果コード(0=成功), 不能理由コード
+    
+    アラートルール:
+    - コード1(残高不足): 2回連続で発生した場合のみアラート
+    - コード2,3,4,8: 即時アラート
     """
     content = await file.read()
     try:
@@ -203,6 +210,7 @@ async def import_debit_result(
 
     success_count = 0
     failed_items = []
+    alerts = []
 
     # ヘッダーをスキップ
     header = next(reader, None)
@@ -228,46 +236,104 @@ async def import_debit_result(
             models.Customer.account_number == account_number,
         ).first()
 
-        if result_code == "0" and customer:
-            # 成功 → 入金処理
-            unpaid = db.query(models.Invoice).filter(
-                models.Invoice.company_id == company_id,
-                models.Invoice.customer_id == customer.id,
-                models.Invoice.status.in_(["sent", "partial", "overdue", "draft"]),
-            ).order_by(models.Invoice.month.asc()).first()
+        if result_code == "0":
+            # 成功 → 入金処理 + 連続残高不足カウンタをリセット
+            if customer:
+                unpaid = db.query(models.Invoice).filter(
+                    models.Invoice.company_id == company_id,
+                    models.Invoice.customer_id == customer.id,
+                    models.Invoice.status.in_(["sent", "partial", "overdue", "draft"]),
+                ).order_by(models.Invoice.month.asc()).first()
 
-            if unpaid:
-                payment = models.Payment(
-                    invoice_id=unpaid.id,
-                    company_id=company_id,
-                    amount=amount,
-                    payment_date=debit_date,
-                    payment_method="auto_debit",
-                    notes="口座振替による自動入金",
-                )
-                db.add(payment)
+                if unpaid:
+                    payment = models.Payment(
+                        invoice_id=unpaid.id,
+                        company_id=company_id,
+                        amount=amount,
+                        payment_date=debit_date,
+                        payment_method="auto_debit",
+                        notes="口座振替による自動入金",
+                    )
+                    db.add(payment)
 
-                total_paid = sum(p.amount for p in unpaid.payments) + amount
-                if total_paid >= unpaid.total_amount:
-                    unpaid.status = "paid"
-                else:
-                    unpaid.status = "partial"
+                    total_paid = sum(p.amount for p in unpaid.payments) + amount
+                    if total_paid >= unpaid.total_amount:
+                        unpaid.status = "paid"
+                    else:
+                        unpaid.status = "partial"
 
-                success_count += 1
+                    success_count += 1
+
+                # 成功したら連続残高不足カウンタをリセット
+                _update_consecutive_failure(db, customer, 0)
         else:
             # 不能 → 結果を返す
             reason = FAILURE_REASONS.get(failure_code, f"不明 (コード:{failure_code})")
-            failed_items.append({
+            cust_name = customer.name if customer else "不明"
+
+            failed_item = {
                 "account_number": account_number,
-                "customer_name": customer.name if customer else "不明",
+                "customer_id": customer.id if customer else None,
+                "customer_name": cust_name,
                 "amount": amount,
                 "failure_code": failure_code,
                 "failure_reason": reason,
-            })
+                "alert": False,
+                "alert_message": "",
+            }
+
+            if failure_code in IMMEDIATE_ALERT_CODES:
+                # コード2,3,4,8 → 即時アラート
+                failed_item["alert"] = True
+                failed_item["alert_message"] = f"⚠️ {cust_name}: {reason} — 要確認"
+                if customer:
+                    _update_consecutive_failure(db, customer, 0)  # 残高不足カウンタはリセット
+            elif failure_code == "1":
+                # コード1(残高不足) → 連続カウント
+                if customer:
+                    prev_count = _get_consecutive_failure(customer)
+                    new_count = prev_count + 1
+                    _update_consecutive_failure(db, customer, new_count)
+
+                    if new_count >= 2:
+                        failed_item["alert"] = True
+                        failed_item["alert_message"] = f"🔴 {cust_name}: 残高不足が{new_count}回連続 — 要対応"
+                    else:
+                        failed_item["alert_message"] = f"残高不足 (1回目 — 次回も不能の場合アラート)"
+
+            failed_items.append(failed_item)
+            if failed_item["alert"]:
+                alerts.append(failed_item)
 
     db.commit()
     return {
         "success_count": success_count,
         "failed_count": len(failed_items),
         "failed_items": failed_items,
+        "alerts": alerts,
+        "alert_count": len(alerts),
     }
+
+
+def _get_consecutive_failure(customer) -> int:
+    """顧客のform_dataから連続残高不足カウントを取得"""
+    import json
+    try:
+        fd = json.loads(customer.form_data or "{}")
+        return int(fd.get("consecutive_debit_failure", 0))
+    except (json.JSONDecodeError, ValueError):
+        return 0
+
+
+def _update_consecutive_failure(db, customer, count: int):
+    """顧客のform_dataに連続残高不足カウントを保存"""
+    import json
+    if not customer:
+        return
+    try:
+        fd = json.loads(customer.form_data or "{}")
+    except json.JSONDecodeError:
+        fd = {}
+    fd["consecutive_debit_failure"] = count
+    customer.form_data = json.dumps(fd, ensure_ascii=False)
+
